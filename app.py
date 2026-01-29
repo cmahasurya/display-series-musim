@@ -5,6 +5,7 @@
 # - Uncertainty band = MIN/MAX across chosen models
 # - Red dashed threshold line (default 50 mm)
 # - Probability P(Rainfall < threshold) per DASARIAN from chosen models
+# - Probability plot uses a distinct non-black color (strong blue)
 # - Preserve DASARIAN order from Excel
 
 import io
@@ -286,7 +287,6 @@ st.subheader(f"Probability of Rainfall < {threshold_mm:.0f} mm (based on selecte
 if prob_below is None or prob_below.empty:
     st.caption("Probability tidak tersedia (pilih minimal 1 model untuk band).")
 else:
-    # Metrics
     c1, c2, c3 = st.columns(3)
     c1.metric("Mean probability", f"{prob_below.mean() * 100:.1f} %")
     c2.metric("Max probability", f"{prob_below.max() * 100:.1f} %")
@@ -295,14 +295,25 @@ else:
     prob_df = prob_below.reset_index()
     prob_df.columns = ["DASARIAN", "PROB_BELOW"]
 
+    fig_prob = go.Figure()
+
+    # Distinct color for probability line (NOT black)
     fig_prob.add_trace(go.Scatter(
         x=prob_df["DASARIAN"],
         y=(prob_df["PROB_BELOW"] * 100.0),
         mode="lines+markers",
         name=f"P(R < {threshold_mm:.0f} mm)",
-        line=dict(color="#1f4fd8", width=3),   # strong blue
+        line=dict(color="#1f4fd8", width=3),  # strong blue
         marker=dict(size=8),
     ))
+
+    # Optional: shade high-probability zone (>=70%) for quick risk reading
+    fig_prob.add_hrect(
+        y0=70, y1=100,
+        fillcolor="red",
+        opacity=0.08,
+        line_width=0,
+    )
 
     fig_prob.update_layout(
         xaxis_title="DASARIAN",
@@ -324,9 +335,8 @@ if show_tables:
         st.subheader("Band Table (min/max/mean)")
         st.dataframe(band_df.reset_index(), use_container_width=True, height=320)
 
-    if prob_below is not None:
-        st.subheader("Probability Table")
-        st.dataframe(prob_df, use_container_width=True, height=320)
+    st.subheader("Probability Table")
+    st.dataframe(prob_df, use_container_width=True, height=320)
 
 if show_pmk:
     st.subheader("PMK Block (Sheet)")
@@ -335,5 +345,3 @@ if show_pmk:
         st.caption("PMK block tidak terdeteksi.")
     else:
         st.dataframe(pmk_sheet, use_container_width=True, height=420)
-
-
