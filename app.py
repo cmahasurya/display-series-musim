@@ -300,10 +300,9 @@ else:
         y=(prob_df["PROB_BELOW"] * 100.0),
         mode="lines+markers",
         name=f"P(R < {threshold_mm:.0f} mm)",
-        line=dict(color="#008080", width=3),   # teal
+        line=dict(color="#1f4fd8", width=3),   # strong blue
         marker=dict(size=8),
     ))
-
 
     fig_prob.update_layout(
         xaxis_title="DASARIAN",
@@ -336,4 +335,5 @@ if show_pmk:
         st.caption("PMK block tidak terdeteksi.")
     else:
         st.dataframe(pmk_sheet, use_container_width=True, height=420)
+
 
