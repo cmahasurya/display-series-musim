@@ -253,7 +253,15 @@ for m in models_selected:
     ))
 
 # Threshold line
-fig.add_hline(y=threshold_mm, line_dash="dash")
+fig.add_hline(
+    y=threshold_mm,
+    line_dash="dash",
+    line_color="red",
+    line_width=2,
+    annotation_text="50 mm threshold",
+    annotation_position="top left",
+)
+
 
 fig.update_layout(
     xaxis_title="DASARIAN",
@@ -277,3 +285,4 @@ with st.expander("Show PMK block"):
         st.caption("PMK block tidak terdeteksi.")
     else:
         st.dataframe(pmk_sheet, use_container_width=True, height=420)
+
