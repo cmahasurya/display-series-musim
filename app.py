@@ -295,14 +295,15 @@ else:
     prob_df = prob_below.reset_index()
     prob_df.columns = ["DASARIAN", "PROB_BELOW"]
 
-    fig_prob = go.Figure()
     fig_prob.add_trace(go.Scatter(
         x=prob_df["DASARIAN"],
         y=(prob_df["PROB_BELOW"] * 100.0),
         mode="lines+markers",
         name=f"P(R < {threshold_mm:.0f} mm)",
-        line=dict(color="black", width=2),
+        line=dict(color="#008080", width=3),   # teal
+        marker=dict(size=8),
     ))
+
 
     fig_prob.update_layout(
         xaxis_title="DASARIAN",
@@ -335,3 +336,4 @@ if show_pmk:
         st.caption("PMK block tidak terdeteksi.")
     else:
         st.dataframe(pmk_sheet, use_container_width=True, height=420)
+
