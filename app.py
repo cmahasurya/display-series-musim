@@ -1,10 +1,11 @@
 # app.py
-# Streamlit Cloud ready:
-# - Load multi-sheet Excel (sheets 1..27)
-# - Plot ALL models with ability to select which to show
-# - Add uncertainty band using MIN/MAX across selected models (per DASARIAN)
+# Streamlit Cloud ready dashboard:
+# - Upload multi-sheet Excel (sheets 1..27 or any sheet names)
+# - Plot selectable model lines
+# - Uncertainty band = MIN/MAX across chosen models
+# - Red dashed threshold line (default 50 mm)
+# - Probability P(Rainfall < threshold) per DASARIAN from chosen models
 # - Preserve DASARIAN order from Excel
-# - Add horizontal threshold line (default 50 mm)
 
 import io
 import re
@@ -20,7 +21,7 @@ TS_ROW_RE = re.compile(r".*\b(19|20)\d{2}\b.*")  # time-series rows contain a ye
 
 
 # -----------------------------
-# Helpers
+# Data helpers
 # -----------------------------
 def read_all_sheets(excel_bytes: bytes) -> pd.DataFrame:
     xls = pd.ExcelFile(io.BytesIO(excel_bytes))
@@ -65,7 +66,7 @@ def to_long(ts: pd.DataFrame) -> pd.DataFrame:
 
 def get_dasarian_order(ts_long: pd.DataFrame, sheet_id: str) -> List[str]:
     das = ts_long.loc[ts_long["SHEET_ID"] == sheet_id, "DASARIAN"].dropna().tolist()
-    return list(dict.fromkeys(das))  # dedupe, preserve order
+    return list(dict.fromkeys(das))  # dedupe preserving order
 
 
 def filter_dasarian_range(ts_long: pd.DataFrame, das_order: List[str], start: str, end: str) -> pd.DataFrame:
@@ -79,6 +80,27 @@ def filter_dasarian_range(ts_long: pd.DataFrame, das_order: List[str], start: st
     return ts_long[ts_long["DASARIAN"].isin(allowed)].copy()
 
 
+def compute_uncertainty_band(pvt: pd.DataFrame, models: List[str]) -> pd.DataFrame:
+    sub = pvt[models].copy()
+    out = pd.DataFrame(index=sub.index)
+    out["min"] = sub.min(axis=1, skipna=True)
+    out["max"] = sub.max(axis=1, skipna=True)
+    out["mean"] = sub.mean(axis=1, skipna=True)
+    return out
+
+
+def compute_probability_below_threshold(pvt: pd.DataFrame, models: List[str], threshold: float) -> pd.Series:
+    """
+    Probability rainfall < threshold for each DASARIAN based on chosen models:
+    P = count(model_value < threshold) / count(valid_model_value)
+    """
+    sub = pvt[models].copy()
+    below = sub < threshold
+    valid_count = sub.notna().sum(axis=1)
+    prob = below.sum(axis=1) / valid_count
+    return prob
+
+
 @st.cache_data(show_spinner=False)
 def load_from_bytes(excel_bytes: bytes):
     df_all = read_all_sheets(excel_bytes)
@@ -89,27 +111,10 @@ def load_from_bytes(excel_bytes: bytes):
     return df_all, ts, pmk, ts_long
 
 
-def pivot_for_sheet(ts_long: pd.DataFrame, sheet: str) -> pd.DataFrame:
-    """Wide table: index=DASARIAN, columns=MODEL, values=RAINFALL."""
-    df = ts_long[ts_long["SHEET_ID"] == sheet].copy()
-    pvt = df.pivot_table(index="DASARIAN", columns="MODEL", values="RAINFALL", aggfunc="mean")
-    return pvt
-
-
-def compute_uncertainty_band(pvt: pd.DataFrame, models: List[str]) -> pd.DataFrame:
-    """Return df with min/max/mean across selected models, per DASARIAN."""
-    sub = pvt[models].copy()
-    out = pd.DataFrame(index=sub.index)
-    out["min"] = sub.min(axis=1, skipna=True)
-    out["max"] = sub.max(axis=1, skipna=True)
-    out["mean"] = sub.mean(axis=1, skipna=True)
-    return out
-
-
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="Dasarian Multi-Model Dashboard", layout="wide")
+st.set_page_config(page_title="Dasarian Multi Model Dashboard", layout="wide")
 st.title("Dasarian Multi Model Dashboard")
 
 st.sidebar.header("Input")
@@ -121,7 +126,7 @@ if uploaded is None:
 df_all, ts, pmk, ts_long = load_from_bytes(uploaded.read())
 
 if df_all.empty or ts_long.empty:
-    st.error("Data tidak valid. Pastikan sheet punya kolom 'DASARIAN' dan kolom model numerik.")
+    st.error("Data tidak valid. Pastikan tiap sheet punya kolom 'DASARIAN' dan kolom model numerik.")
     st.stop()
 
 # -----------------------------
@@ -142,7 +147,7 @@ end_das = st.sidebar.selectbox("End DASARIAN", das_order_full, index=len(das_ord
 
 threshold_mm = st.sidebar.number_input("Threshold line (mm)", min_value=0.0, value=50.0, step=1.0)
 
-# Preferred model ordering (your list)
+# Preferred ordering (your list)
 preferred_models = [
     "CFSV2-RAW", "CFSV2-COR", "ECMWF-RAW", "ECMWF-COR", "BOBOT",
     "INAMME-I", "INAMME-II", "INARCM", "ARIMA", "WARIMA",
@@ -151,43 +156,43 @@ preferred_models = [
 ]
 
 models_all = sorted(ts_long["MODEL"].dropna().unique().tolist())
-
-# Order models by preferred list first, then the rest
 models_ordered = [m for m in preferred_models if m in models_all] + [m for m in models_all if m not in preferred_models]
 
-default_selection = [m for m in ["MEDIAN", "ENS_STA_1", "ENS_STA_2"] if m in models_ordered]
-if not default_selection:
-    default_selection = models_ordered[:3]
+default_lines = [m for m in ["MEDIAN", "ENS_STA_1", "ENS_STA_2"] if m in models_ordered]
+if not default_lines:
+    default_lines = models_ordered[:3]
 
 models_selected = st.sidebar.multiselect(
     "Models to show (lines)",
     options=models_ordered,
-    default=default_selection
+    default=default_lines
 )
 
 band_models = st.sidebar.multiselect(
-    "Models for uncertainty band (min-max)",
+    "Models for uncertainty band + probability",
     options=models_ordered,
-    default=models_selected if models_selected else default_selection
+    default=models_selected if models_selected else default_lines
 )
 
 show_mean_in_band = st.sidebar.toggle("Show band mean", value=True)
+show_tables = st.sidebar.toggle("Show tables", value=False)
+show_pmk = st.sidebar.toggle("Show PMK block", value=False)
 
 # -----------------------------
-# Build data for selected sheet + range
+# Prepare data for selected sheet + range
 # -----------------------------
 ts_sheet = ts_long[ts_long["SHEET_ID"] == sheet].copy()
 ts_sheet = filter_dasarian_range(ts_sheet, das_order_full, start_das, end_das)
 
-# Keep DASARIAN order
+# Preserve DASARIAN order (from filtered data order)
 das_order = list(dict.fromkeys(ts_sheet["DASARIAN"].tolist()))
 ts_sheet["DASARIAN"] = pd.Categorical(ts_sheet["DASARIAN"], categories=das_order, ordered=True)
 ts_sheet = ts_sheet.sort_values("DASARIAN")
 
-# Pivot for band computation
+# Pivot: DASARIAN x MODEL
 pvt = ts_sheet.pivot_table(index="DASARIAN", columns="MODEL", values="RAINFALL", aggfunc="mean")
 
-# Ensure selected lists exist
+# Keep only models that exist in pivot
 models_selected = [m for m in models_selected if m in pvt.columns]
 band_models = [m for m in band_models if m in pvt.columns]
 
@@ -195,23 +200,26 @@ if not models_selected:
     st.warning("No models selected to plot.")
     st.stop()
 
-# Uncertainty band
-band_df = None
+# Compute band + probability (if band_models provided)
+band_df: Optional[pd.DataFrame] = None
+prob_below: Optional[pd.Series] = None
+
 if band_models:
     band_df = compute_uncertainty_band(pvt, band_models)
+    prob_below = compute_probability_below_threshold(pvt, band_models, threshold_mm)
 
 # -----------------------------
-# Plot
+# MAIN PLOT: Rainfall + Band + Threshold
 # -----------------------------
-st.subheader(f"Multi Model Time Series — Sheet {sheet}")
+st.subheader(f"Multi Model Rainfall Time Series — Sheet {sheet}")
 
 fig = go.Figure()
 
-# Add uncertainty band (min-max)
+# Uncertainty band (min-max)
 if band_df is not None and band_df.dropna(how="all").shape[0] > 0:
     x_vals = band_df.index.tolist()
 
-    # Upper bound
+    # Upper bound (invisible line, used for fill)
     fig.add_trace(go.Scatter(
         x=x_vals,
         y=band_df["max"].tolist(),
@@ -222,7 +230,7 @@ if band_df is not None and band_df.dropna(how="all").shape[0] > 0:
         hoverinfo="skip",
     ))
 
-    # Lower bound with fill to previous trace
+    # Lower bound with fill
     fig.add_trace(go.Scatter(
         x=x_vals,
         y=band_df["min"].tolist(),
@@ -233,7 +241,7 @@ if band_df is not None and band_df.dropna(how="all").shape[0] > 0:
         hovertemplate="Min: %{y:.2f}<extra></extra>",
     ))
 
-    # Optional mean
+    # Optional mean line of band
     if show_mean_in_band:
         fig.add_trace(go.Scatter(
             x=x_vals,
@@ -242,26 +250,24 @@ if band_df is not None and band_df.dropna(how="all").shape[0] > 0:
             name="Mean (band)",
         ))
 
-# Add model lines
+# Model lines
 for m in models_selected:
-    y = pvt[m].tolist()
     fig.add_trace(go.Scatter(
         x=pvt.index.tolist(),
-        y=y,
+        y=pvt[m].tolist(),
         mode="lines+markers",
         name=m,
     ))
 
-# Threshold line
+# Red dashed threshold line
 fig.add_hline(
     y=threshold_mm,
     line_dash="dash",
     line_color="red",
     line_width=2,
-    annotation_text="50 mm threshold",
+    annotation_text=f"{threshold_mm:.0f} mm threshold",
     annotation_position="top left",
 )
-
 
 fig.update_layout(
     xaxis_title="DASARIAN",
@@ -273,16 +279,59 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# Tables (optional)
+# PROBABILITY PLOT: P(R < threshold)
 # -----------------------------
-with st.expander("Show wide table (DASARIAN × MODEL)"):
+st.subheader(f"Probability of Rainfall < {threshold_mm:.0f} mm (based on selected band models)")
+
+if prob_below is None or prob_below.empty:
+    st.caption("Probability tidak tersedia (pilih minimal 1 model untuk band).")
+else:
+    # Metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Mean probability", f"{prob_below.mean() * 100:.1f} %")
+    c2.metric("Max probability", f"{prob_below.max() * 100:.1f} %")
+    c3.metric("Min probability", f"{prob_below.min() * 100:.1f} %")
+
+    prob_df = prob_below.reset_index()
+    prob_df.columns = ["DASARIAN", "PROB_BELOW"]
+
+    fig_prob = go.Figure()
+    fig_prob.add_trace(go.Scatter(
+        x=prob_df["DASARIAN"],
+        y=(prob_df["PROB_BELOW"] * 100.0),
+        mode="lines+markers",
+        name=f"P(R < {threshold_mm:.0f} mm)",
+        line=dict(color="black", width=2),
+    ))
+
+    fig_prob.update_layout(
+        xaxis_title="DASARIAN",
+        yaxis_title="Probability (%)",
+        yaxis=dict(range=[0, 100]),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig_prob, use_container_width=True)
+
+# -----------------------------
+# Optional tables / PMK
+# -----------------------------
+if show_tables:
+    st.subheader("Wide Table (DASARIAN × MODEL)")
     st.dataframe(pvt.reset_index(), use_container_width=True, height=420)
 
-# PMK block
-with st.expander("Show PMK block"):
+    if band_df is not None:
+        st.subheader("Band Table (min/max/mean)")
+        st.dataframe(band_df.reset_index(), use_container_width=True, height=320)
+
+    if prob_below is not None:
+        st.subheader("Probability Table")
+        st.dataframe(prob_df, use_container_width=True, height=320)
+
+if show_pmk:
+    st.subheader("PMK Block (Sheet)")
     pmk_sheet = pmk[pmk["SHEET_ID"] == sheet].copy()
     if pmk_sheet.empty:
         st.caption("PMK block tidak terdeteksi.")
     else:
         st.dataframe(pmk_sheet, use_container_width=True, height=420)
-
